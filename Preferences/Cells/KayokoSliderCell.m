@@ -1,8 +1,3 @@
-//
-//  KayokoSliderCell.m
-//  Kayoko
-//
-
 #import "KayokoSliderCell.h"
 
 #import <Preferences/PSSpecifier.h>
@@ -26,7 +21,6 @@
         return nil;
     }
 
-    // Read custom value label width (default 50)
     NSNumber *labelWidthNum = [specifier propertyForKey:@"valueLabelWidth"];
 
     if (labelWidthNum && [labelWidthNum isKindOfClass:[NSNumber class]]) {
@@ -42,21 +36,19 @@
     if ([title isKindOfClass:[NSString class]] && [title length] > 0) {
         _titleLabel = [[UILabel alloc] init];
         _titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
-        _titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
-        _titleLabel.adjustsFontForContentSizeCategory = YES;
+        _titleLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightRegular];
+        _titleLabel.adjustsFontForContentSizeCategory = NO;
         _titleLabel.numberOfLines = 1;
         _titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
         _titleLabel.text = title;
         [self.contentView addSubview:_titleLabel];
     }
 
-    // Create slider
     _slider = [[UISlider alloc] init];
     _slider.translatesAutoresizingMaskIntoConstraints = NO;
     [_slider addTarget:self action:@selector(sliderValueChanged:) forControlEvents:UIControlEventValueChanged];
     [self.contentView addSubview:_slider];
 
-    // Create value label (only if showValue is true)
     NSNumber *showValue = [specifier propertyForKey:@"showValue"];
 
     if (!showValue || [showValue boolValue]) {
@@ -67,6 +59,11 @@
         _valueLabel.textColor = [UIColor secondaryLabelColor];
         _valueLabel.numberOfLines = 1;
         _valueLabel.lineBreakMode = NSLineBreakByClipping;
+        // 点击数值可弹出输入框精确设置任意值
+        _valueLabel.userInteractionEnabled = YES;
+        [_valueLabel addGestureRecognizer:[[UITapGestureRecognizer alloc]
+                                              initWithTarget:self
+                                                      action:@selector(handleValueLabelTapped)]];
         [self.contentView addSubview:_valueLabel];
     }
 
@@ -77,13 +74,19 @@
         [self.contentView addSubview:_topSeparator];
     }
 
-    // Sync slider properties from specifier
     [self _syncWithSpecifier:specifier];
 
-    // Setup constraints
     [self setupConstraints];
 
     return self;
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    UIFont *titleFont = [UIFont systemFontOfSize:17 weight:UIFontWeightRegular];
+    self.textLabel.font = titleFont;
+    self.textLabel.adjustsFontForContentSizeCategory = NO;
+    _titleLabel.font = titleFont;
 }
 
 - (void)setupConstraints {
@@ -109,20 +112,16 @@
     }
 
     if (_valueLabel) {
-        // Slider + Value Label layout
         [NSLayoutConstraint activateConstraints:@[
-            // Value label on the right
             [_valueLabel.trailingAnchor constraintEqualToAnchor:margins.trailingAnchor],
             [_valueLabel.centerYAnchor constraintEqualToAnchor:self.contentView.centerYAnchor],
             [_valueLabel.widthAnchor constraintEqualToConstant:_valueLabelWidth],
 
-            // Slider fills remaining space
             [_slider.leadingAnchor constraintEqualToAnchor:sliderLeadingAnchor constant:(_titleLabel ? 12.0 : 0.0)],
             [_slider.trailingAnchor constraintEqualToAnchor:_valueLabel.leadingAnchor constant:-12],
             [_slider.centerYAnchor constraintEqualToAnchor:self.contentView.centerYAnchor],
         ]];
     } else {
-        // Slider only layout
         [NSLayoutConstraint activateConstraints:@[
             [_slider.leadingAnchor constraintEqualToAnchor:sliderLeadingAnchor constant:(_titleLabel ? 12.0 : 0.0)],
             [_slider.trailingAnchor constraintEqualToAnchor:margins.trailingAnchor],
@@ -130,7 +129,6 @@
         ]];
     }
 
-    // Fixed height constraint
     [NSLayoutConstraint activateConstraints:@[
         [self.contentView.heightAnchor constraintGreaterThanOrEqualToConstant:44.0],
     ]];
@@ -200,7 +198,6 @@
 - (void)sliderValueChanged:(UISlider *)slider {
     PSSpecifier *specifier = self.specifier;
 
-    // Handle segmented slider - snap to discrete values
     NSNumber *isSegmented = [specifier propertyForKey:@"isSegmented"];
 
     if (isSegmented && [isSegmented boolValue]) {
@@ -216,14 +213,50 @@
         }
     }
 
-    // Update value label
     [self updateValueLabel];
 
-    // Notify the specifier's target - use performSetterWithValue method
     if (specifier) {
         NSNumber *value = @(slider.value);
         [specifier performSetterWithValue:value];
     }
+}
+
+// 点击数值弹出输入框，可精确设置任意值(限定在 min~max 范围)
+- (void)handleValueLabelTapped {
+    if (!_slider.enabled) {
+        return;
+    }
+    NSInteger minValue = (NSInteger)_slider.minimumValue;
+    NSInteger maxValue = (NSInteger)_slider.maximumValue;
+    UIViewController *controller = [[self specifier] target];
+    if (![controller isKindOfClass:[UIViewController class]]) {
+        return;
+    }
+
+    UIAlertController *alert = [UIAlertController
+        alertControllerWithTitle:[[self specifier] name]
+                         message:[NSString stringWithFormat:@"%ld - %ld", (long)minValue, (long)maxValue]
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+      [textField setKeyboardType:UIKeyboardTypeNumberPad];
+      [textField setText:[NSString stringWithFormat:@"%ld", (long)(NSInteger)_slider.value]];
+    }];
+    __weak typeof(self) weakSelf = self;
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction *action) {
+                                              __strong typeof(weakSelf) strongSelf = weakSelf;
+                                              if (!strongSelf) {
+                                                  return;
+                                              }
+                                              NSInteger entered = [[alert textFields].firstObject.text integerValue];
+                                              entered = MAX(minValue, MIN(maxValue, entered));
+                                              strongSelf->_slider.value = (float)entered;
+                                              [strongSelf updateValueLabel];
+                                              [[strongSelf specifier] performSetterWithValue:@(entered)];
+                                            }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [controller presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)refreshCellContentsWithSpecifier:(PSSpecifier *)specifier {
